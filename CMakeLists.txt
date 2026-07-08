@@ -22,7 +22,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(JUCE)
 
 juce_add_plugin(SubOsc
-    COMPANY_NAME "YourName"
+    COMPANY_NAME "David Test Plugin"
     PLUGIN_MANUFACTURER_CODE Subo
     PLUGIN_CODE Sub1
     FORMATS VST3 Standalone

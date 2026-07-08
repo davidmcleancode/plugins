@@ -82,6 +82,9 @@ private:
     };
     std::array<StepUI, SubOscAudioProcessor::numSteps> steps;
 
+    // Row labels for the per-step grid (identify what each row of controls does)
+    juce::Label seqStepsRowLabel, seqActiveRowLabel, seqNoteRowLabel, seqLengthRowLabel, seqFreqRowLabel;
+
     int lastPaintedStep = -1;
     bool lastSyncedState = false;
 

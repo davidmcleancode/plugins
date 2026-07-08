@@ -177,7 +177,21 @@ SubOscAudioProcessorEditor::SubOscAudioProcessorEditor (SubOscAudioProcessor& p)
         addAndMakeVisible (st.numberLabel);
     }
 
-    setSize (1180, 800);
+    auto setupRowLabel = [this] (juce::Label& lbl, const juce::String& text)
+    {
+        lbl.setText (text, juce::dontSendNotification);
+        lbl.setJustificationType (juce::Justification::centredRight);
+        lbl.setColour (juce::Label::textColourId, knobLnF.ink);
+        lbl.setFont (juce::Font (10.0f, juce::Font::bold));
+        addAndMakeVisible (lbl);
+    };
+    setupRowLabel (seqStepsRowLabel,  "STEP");
+    setupRowLabel (seqActiveRowLabel, "ON");
+    setupRowLabel (seqNoteRowLabel,   "NOTE");
+    setupRowLabel (seqLengthRowLabel, "LENGTH");
+    setupRowLabel (seqFreqRowLabel,   "FILTER FREQ");
+
+    setSize (1180, 540);
     startTimerHz (30);
 }
 
@@ -279,12 +293,20 @@ void SubOscAudioProcessorEditor::resized()
 
     // --- sequencer grid ------------------------------------------------------
     int seqY = row2Y + 130;
-    int seqW = full.getWidth() - x0 * 2;
+    const int labelGutter = 78;
+    int seqX0 = x0 + labelGutter;
+    int seqW = full.getWidth() - seqX0 - x0;
     float colW = (float) seqW / (float) SubOscAudioProcessor::numSteps;
+
+    seqStepsRowLabel.setBounds  (x0, seqY,       labelGutter - 8, 14);
+    seqActiveRowLabel.setBounds (x0, seqY + 16,  labelGutter - 8, 20);
+    seqNoteRowLabel.setBounds   (x0, seqY + 42,  labelGutter - 8, 34);
+    seqLengthRowLabel.setBounds (x0, seqY + 80,  labelGutter - 8, 34);
+    seqFreqRowLabel.setBounds   (x0, seqY + 118, labelGutter - 8, 34);
 
     for (int s = 0; s < SubOscAudioProcessor::numSteps; ++s)
     {
-        int cx = x0 + (int) (s * colW);
+        int cx = seqX0 + (int) (s * colW);
         int cw = (int) colW - 2;
         auto& st = steps[(size_t) s];
 

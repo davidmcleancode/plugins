@@ -85,13 +85,17 @@ public:
     juce::AudioProcessorValueTreeState apvts;
 
     // Transport control for the built-in sequencer. Set from the editor.
+    // Used only when no host playhead is available (e.g. the Standalone app) —
+    // when hosted in a DAW that provides transport info, the host's own
+    // play/stop and tempo drive the sequencer instead, sample-accurately.
     std::atomic<bool> sequencerPlaying { false };
     std::atomic<int>  uiCurrentStep    { -1 }; // for the editor's playhead LED
+    std::atomic<bool> hostSyncActive   { false }; // true whenever a valid host playhead is present
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    void triggerStep (int stepIndex);
+    void triggerStep (int stepIndex, double bpmForTiming);
     Voice* findFreeVoice();
 
     std::array<Voice, numVoices> voices;
@@ -99,6 +103,7 @@ private:
     double sampleRate = 44100.0;
     double stepAccumulatorSamples = 0.0;
     int currentStep = 0;
+    int64_t lastHostStepIndex = -1; // used only in host-synced mode
     double lastTriggeredFreq = 0.0;
 
     // cached atomic parameter pointers, fetched once in prepareToPlay

@@ -83,6 +83,7 @@ private:
     std::array<StepUI, SubOscAudioProcessor::numSteps> steps;
 
     int lastPaintedStep = -1;
+    bool lastSyncedState = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SubOscAudioProcessorEditor)
 };

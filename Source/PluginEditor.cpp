@@ -310,4 +310,21 @@ void SubOscAudioProcessorEditor::timerCallback()
 
         lastPaintedStep = cur;
     }
+
+    bool synced = processor.hostSyncActive.load();
+    if (synced != lastSyncedState)
+    {
+        lastSyncedState = synced;
+        playButton.setEnabled (! synced);
+        if (synced)
+        {
+            playButton.setButtonText ("Host");
+            statusLabel.setText ("Synced to host transport", juce::dontSendNotification);
+        }
+        else
+        {
+            playButton.setButtonText (processor.sequencerPlaying.load() ? "Stop" : "Play");
+            statusLabel.setText ("Click Play to start", juce::dontSendNotification);
+        }
+    }
 }

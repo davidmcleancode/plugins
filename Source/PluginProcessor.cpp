@@ -116,6 +116,7 @@ void SubOscAudioProcessor::prepareToPlay (double newSampleRate, int /*samplesPer
     sampleRate = newSampleRate;
     stepAccumulatorSamples = 0.0;
     currentStep = 0;
+    lastHostStepIndex = -1;
     lastTriggeredFreq = 0.0;
 
     masterVolumeSmoothed.reset (sampleRate, 0.01);
@@ -171,7 +172,7 @@ Voice* SubOscAudioProcessor::findFreeVoice()
     return &voices[0];
 }
 
-void SubOscAudioProcessor::triggerStep (int stepIndex)
+void SubOscAudioProcessor::triggerStep (int stepIndex, double bpmForTiming)
 {
     auto& sp = stepParams[stepIndex];
     bool isActive = sp.active->load() > 0.5f;
@@ -185,8 +186,7 @@ void SubOscAudioProcessor::triggerStep (int stepIndex)
     if (lengthFrac <= 0.001 || freqKnob <= freqMin * 1.05)
         return;
 
-    double bpm = (double) pBpm->load();
-    double secPerStep = 60.0 / bpm / 4.0; // 16th notes
+    double secPerStep = 60.0 / bpmForTiming / 4.0; // 16th notes
     double durSeconds = secPerStep * lengthFrac;
     auto durSamples = (int64_t) (durSeconds * sampleRate);
 
@@ -241,20 +241,69 @@ void SubOscAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     const int numChannels = buffer.getNumChannels();
     const double modRange = 9000.0;
 
-    const double bpm = (double) pBpm->load();
-    const double samplesPerStep = (60.0 / bpm / 4.0) * sampleRate;
+    // ---- figure out our clock source for this block -----------------------
+    // If the host provides a playhead with a valid ppq position (virtually
+    // every real DAW, including Reason 12.5+), we lock the sequencer to the
+    // host's tempo, play state, and bar position sample-accurately. If not
+    // (e.g. running as the Standalone app with no host), we fall back to our
+    // own free-running clock driven by the TEMPO knob and the Play button.
+    bool hostSynced = false;
+    bool hostIsPlaying = false;
+    double hostPpqAtBlockStart = 0.0;
+    double effectiveBpm = (double) pBpm->load();
+
+    if (auto* ph = getPlayHead())
+    {
+        if (auto pos = ph->getPosition())
+        {
+            if (auto ppqOpt = pos->getPpqPosition())
+            {
+                hostSynced = true;
+                hostPpqAtBlockStart = *ppqOpt;
+                hostIsPlaying = pos->getIsPlaying();
+                if (auto bpmOpt = pos->getBpm())
+                    effectiveBpm = *bpmOpt;
+            }
+        }
+    }
+    hostSyncActive.store (hostSynced);
+
+    const double ppqPerSample   = (effectiveBpm / 60.0) / sampleRate;
+    const double samplesPerStep = (60.0 / effectiveBpm / 4.0) * sampleRate; // 16th notes, free-running fallback only
 
     masterVolumeSmoothed.setTargetValue (pVolume->load());
 
     for (int i = 0; i < numSamples; ++i)
     {
-        if (sequencerPlaying.load())
+        if (hostSynced)
+        {
+            if (hostIsPlaying)
+            {
+                double currentPpq = hostPpqAtBlockStart + (double) i * ppqPerSample;
+                auto stepIndex64 = (int64_t) std::floor (currentPpq / 0.25); // 0.25 quarter-note = one 16th
+                if (stepIndex64 != lastHostStepIndex)
+                {
+                    lastHostStepIndex = stepIndex64;
+                    int col = (int) (((stepIndex64 % numSteps) + numSteps) % numSteps);
+                    triggerStep (col, effectiveBpm);
+                    uiCurrentStep.store (col);
+                }
+            }
+            else
+            {
+                // Host is stopped/paused: reset so playback resumes cleanly
+                // and re-triggers correctly next time it starts, wherever
+                // the playhead has moved to in the meantime.
+                lastHostStepIndex = -1;
+            }
+        }
+        else if (sequencerPlaying.load())
         {
             stepAccumulatorSamples += 1.0;
             if (stepAccumulatorSamples >= samplesPerStep)
             {
                 stepAccumulatorSamples -= samplesPerStep;
-                triggerStep (currentStep);
+                triggerStep (currentStep, effectiveBpm);
                 uiCurrentStep.store (currentStep);
                 currentStep = (currentStep + 1) % numSteps;
             }

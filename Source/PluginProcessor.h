@@ -6,10 +6,10 @@
 
 //==============================================================================
 // A single one-shot polyphonic voice. Every parameter it needs (oscillator
-// waveform/octave/detune/level, resonance, EG amount, ADSR times, and this
-// particular step's filter cutoff) is captured once at trigger time, exactly
-// like the original playNote() in the web version — a voice never reacts to
-// knob movements after it has started, only *new* voices do.
+// waveform/octave/detune/level, resonance, EG amount, ADSR times, this step's
+// filter type, and the frequency the note starts on) is captured once at
+// trigger time — a voice never reacts to knob movements after it has
+// started, only *new* voices do.
 //==============================================================================
 struct Voice
 {
@@ -27,9 +27,10 @@ struct Voice
     double freqBase = 440.0;                 // fundamental frequency (Hz)
     juce::SmoothedValue<double> freqGlide;   // portamento from the previous note
 
-    double baseCutoff = 8000.0;
+    double baseCutoff = 8000.0;               // frequency the note starts on
     double resonanceQ = 1.0;
-    double egAmount   = 0.0;                 // -1..1
+    double egAmount   = 0.0;                  // -1..1, also scales the per-step filter mod
+    int    filterType = 0;                    // 0 = lowpass, 1 = bandpass, 2 = highpass
 
     juce::ADSR adsr;
     juce::ADSR::Parameters adsrParams;
@@ -81,6 +82,7 @@ public:
     static constexpr int numVoices = 8;
     static constexpr double freqMin = 20.0;
     static constexpr double freqMax = 16000.0;
+    static constexpr float  sharedOscLevelDefault = 0.7f; // what alt-click-to-link resets all 3 osc levels to
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -125,13 +127,16 @@ private:
     std::atomic<float>* pRelease = nullptr;
     std::atomic<float>* pVolume = nullptr;
     std::atomic<float>* pBpm = nullptr;
+    std::atomic<float>* pFilterFreq = nullptr; // main/global filter frequency
+    std::atomic<float>* pFilterType = nullptr; // global default filter type (0 LP / 1 BP / 2 HP)
 
     struct StepParams
     {
         std::atomic<float>* active = nullptr;
         std::atomic<float>* note = nullptr;
         std::atomic<float>* length = nullptr;
-        std::atomic<float>* freq = nullptr;
+        std::atomic<float>* freqMod = nullptr; // -1..1 bidirectional modulation around the global filter freq
+        std::atomic<float>* type = nullptr;    // 0 LP / 1 BP / 2 HP for this step
     };
     std::array<StepParams, numSteps> stepParams;
 

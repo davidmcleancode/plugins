@@ -16,13 +16,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout SubOscAudioProcessor::create
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
     juce::StringArray waveNames { "Sine", "Triangle", "Saw", "Square" };
+    juce::StringArray filterTypeNames { "Low Pass", "Band Pass", "High Pass" };
 
     // --- 3 oscillators -----------------------------------------------------
+    // All three start as Saw, all three start at the same level (this is also
+    // what alt/option-click on any Level knob resets all three back to).
     struct OscDefault { int wave; int octave; float detune; float level; };
     const OscDefault oscDefaults[3] = {
-        { 2, 0,  0.0f, 0.8f },  // saw
-        { 3, 0,  7.0f, 0.5f },  // square, slightly detuned
-        { 0, -1, 0.0f, 0.5f }   // sine, one octave down (sub)
+        { 2, 0,  0.0f, sharedOscLevelDefault },
+        { 2, 0,  7.0f, sharedOscLevelDefault },  // slightly detuned for thickness
+        { 2, -1, 0.0f, sharedOscLevelDefault }   // one octave down (sub)
     };
 
     for (int i = 1; i <= 3; ++i)
@@ -49,6 +52,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout SubOscAudioProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID ("glide", 1), "Glide", juce::NormalisableRange<float> (0.0f, 0.4f), 0.0f));
 
+    // Main filter frequency — the shared base that every step's filter mod
+    // knob shifts up or down from.
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID ("filterFreq", 1), "Filter Freq",
+        juce::NormalisableRange<float> ((float) freqMin, (float) freqMax, 0.0f, 0.3f), 4000.0f));
+
+    // Global default filter type. Steps each have their own type switch too
+    // (so different steps can use different filter types); this global one
+    // is what "Clear" resets every step's type back to.
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID ("filterType", 1), "Filter Type", filterTypeNames, 0));
+
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID ("resonance", 1), "Resonance", juce::NormalisableRange<float> (0.1f, 20.0f), 1.2f));
 
@@ -71,8 +86,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout SubOscAudioProcessor::create
         juce::NormalisableRange<float> (0.001f, 3.0f, 0.0f, 0.3f), 0.35f));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        juce::ParameterID ("volume", 1), "Volume", juce::NormalisableRange<float> (0.0f, 1.0f), 0.65f));
+        juce::ParameterID ("volume", 1), "Master Volume", juce::NormalisableRange<float> (0.0f, 1.0f), 0.65f));
 
+    // Tempo is no longer shown as a knob (the plugin syncs to the host
+    // transport), but the parameter stays defined so the Standalone build
+    // (which has no host to sync to) still has a sensible fixed tempo to
+    // fall back on.
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID ("bpm", 1), "Tempo", juce::NormalisableRange<float> (60.0f, 200.0f), 120.0f));
 
@@ -101,10 +120,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout SubOscAudioProcessor::create
             juce::ParameterID ("step" + n + "Length", 1), "Step " + n + " Length",
             juce::NormalisableRange<float> (0.0f, 1.4f), 0.65f));
 
-        // Log-ish skew so most of the knob's travel covers the musically useful range.
+        // Bidirectional: negative = pulls the filter down from the global
+        // Filter Freq knob when this step's note starts, positive = pushes
+        // it up. 0 (centre) = no shift. Depth is scaled by EG Amount.
         params.push_back (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID ("step" + n + "Freq", 1), "Step " + n + " Filter Freq",
-            juce::NormalisableRange<float> ((float) freqMin, (float) freqMax, 0.0f, 0.3f), 6000.0f));
+            juce::ParameterID ("step" + n + "Freq", 1), "Step " + n + " Filter Mod",
+            juce::NormalisableRange<float> (-1.0f, 1.0f), 0.0f));
+
+        params.push_back (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID ("step" + n + "Type", 1), "Step " + n + " Filter Type", filterTypeNames, 0));
     }
 
     return { params.begin(), params.end() };
@@ -133,23 +157,26 @@ void SubOscAudioProcessor::prepareToPlay (double newSampleRate, int /*samplesPer
         oscParams[i].level  = apvts.getRawParameterValue ("osc" + n + "Level");
     }
 
-    pGlide     = apvts.getRawParameterValue ("glide");
-    pResonance = apvts.getRawParameterValue ("resonance");
-    pEgAmount  = apvts.getRawParameterValue ("egAmount");
-    pAttack    = apvts.getRawParameterValue ("attack");
-    pDecay     = apvts.getRawParameterValue ("decay");
-    pSustain   = apvts.getRawParameterValue ("sustain");
-    pRelease   = apvts.getRawParameterValue ("release");
-    pVolume    = apvts.getRawParameterValue ("volume");
-    pBpm       = apvts.getRawParameterValue ("bpm");
+    pGlide      = apvts.getRawParameterValue ("glide");
+    pFilterFreq = apvts.getRawParameterValue ("filterFreq");
+    pFilterType = apvts.getRawParameterValue ("filterType");
+    pResonance  = apvts.getRawParameterValue ("resonance");
+    pEgAmount   = apvts.getRawParameterValue ("egAmount");
+    pAttack     = apvts.getRawParameterValue ("attack");
+    pDecay      = apvts.getRawParameterValue ("decay");
+    pSustain    = apvts.getRawParameterValue ("sustain");
+    pRelease    = apvts.getRawParameterValue ("release");
+    pVolume     = apvts.getRawParameterValue ("volume");
+    pBpm        = apvts.getRawParameterValue ("bpm");
 
     for (int s = 0; s < numSteps; ++s)
     {
         auto n = juce::String (s + 1);
-        stepParams[s].active = apvts.getRawParameterValue ("step" + n + "Active");
-        stepParams[s].note   = apvts.getRawParameterValue ("step" + n + "Note");
-        stepParams[s].length = apvts.getRawParameterValue ("step" + n + "Length");
-        stepParams[s].freq   = apvts.getRawParameterValue ("step" + n + "Freq");
+        stepParams[s].active  = apvts.getRawParameterValue ("step" + n + "Active");
+        stepParams[s].note    = apvts.getRawParameterValue ("step" + n + "Note");
+        stepParams[s].length  = apvts.getRawParameterValue ("step" + n + "Length");
+        stepParams[s].freqMod = apvts.getRawParameterValue ("step" + n + "Freq");
+        stepParams[s].type    = apvts.getRawParameterValue ("step" + n + "Type");
     }
 }
 
@@ -180,10 +207,9 @@ void SubOscAudioProcessor::triggerStep (int stepIndex, double bpmForTiming)
         return;
 
     double lengthFrac = (double) sp.length->load();
-    double freqKnob   = (double) sp.freq->load();
 
-    // Length knob at minimum, or filter fully closed -> the step is silent.
-    if (lengthFrac <= 0.001 || freqKnob <= freqMin * 1.05)
+    // Length knob at minimum -> the step is silent.
+    if (lengthFrac <= 0.001)
         return;
 
     double secPerStep = 60.0 / bpmForTiming / 4.0; // 16th notes
@@ -215,9 +241,20 @@ void SubOscAudioProcessor::triggerStep (int stepIndex, double bpmForTiming)
         v->phase[o] = 0.0;
     }
 
-    v->baseCutoff = freqKnob;
-    v->resonanceQ = (double) pResonance->load();
-    v->egAmount   = (double) pEgAmount->load() / 100.0;
+    // The frequency this note starts on: the global Filter Freq knob, shifted
+    // up or down by this step's (bidirectional) filter mod knob, scaled by
+    // how far EG Amount is turned up.
+    double egAmt = (double) pEgAmount->load() / 100.0; // -1..1
+    double globalFilterFreq = (double) pFilterFreq->load();
+    double stepModNorm = (double) sp.freqMod->load(); // -1..1
+    const double maxOctaveSpan = 4.0; // full swing at eg=100% and mod=+-1
+    double startCutoff = globalFilterFreq * std::pow (2.0, stepModNorm * egAmt * maxOctaveSpan);
+    startCutoff = juce::jlimit (30.0, freqMax, startCutoff);
+
+    v->baseCutoff  = startCutoff;
+    v->resonanceQ  = (double) pResonance->load();
+    v->egAmount    = egAmt;
+    v->filterType  = (int) std::round (sp.type->load());
 
     v->adsrParams.attack  = juce::jmax (0.001f, pAttack->load());
     v->adsrParams.decay   = juce::jmax (0.001f, pDecay->load());
@@ -246,7 +283,8 @@ void SubOscAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     // every real DAW, including Reason 12.5+), we lock the sequencer to the
     // host's tempo, play state, and bar position sample-accurately. If not
     // (e.g. running as the Standalone app with no host), we fall back to our
-    // own free-running clock driven by the TEMPO knob and the Play button.
+    // own free-running clock driven by the fixed internal tempo and the Play
+    // button.
     bool hostSynced = false;
     bool hostIsPlaying = false;
     double hostPpqAtBlockStart = 0.0;
@@ -360,11 +398,29 @@ void SubOscAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 v.phase[o] = ph;
             }
 
+            // The note-start frequency (v.baseCutoff) already includes this
+            // step's static filter-mod offset; on top of that, the ADSR
+            // envelope continues to breathe the cutoff around that point for
+            // the life of the note, using the same EG Amount depth.
             double cutoffNow = v.baseCutoff + v.egAmount * modRange * (double) env;
             cutoffNow = juce::jlimit (30.0, freqMax, cutoffNow);
+            float qClamped = (float) juce::jlimit (0.1, 20.0, v.resonanceQ);
 
-            v.filter.coefficients = juce::dsp::IIR::Coefficients<float>::makeLowPass (
-                sampleRate, (float) cutoffNow, (float) juce::jlimit (0.1, 20.0, v.resonanceQ));
+            switch (v.filterType)
+            {
+                case 1:
+                    v.filter.coefficients = juce::dsp::IIR::Coefficients<float>::makeBandPass (
+                        sampleRate, (float) cutoffNow, qClamped);
+                    break;
+                case 2:
+                    v.filter.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighPass (
+                        sampleRate, (float) cutoffNow, qClamped);
+                    break;
+                default:
+                    v.filter.coefficients = juce::dsp::IIR::Coefficients<float>::makeLowPass (
+                        sampleRate, (float) cutoffNow, qClamped);
+                    break;
+            }
 
             float filtered = v.filter.processSample ((float) oscSum);
             mixSample += filtered * env;

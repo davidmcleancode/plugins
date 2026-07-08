@@ -96,6 +96,18 @@ SubOscAudioProcessorEditor::SubOscAudioProcessorEditor (SubOscAudioProcessor& p)
 {
     setLookAndFeel (&knobLnF);
 
+    // All 3 oscillator Level knobs reset together on alt/option-click, back
+    // to the same shared default value.
+    auto resetAllOscLevels = [this]
+    {
+        for (int j = 1; j <= 3; ++j)
+        {
+            auto id = "osc" + juce::String (j) + "Level";
+            if (auto* param = processor.apvts.getParameter (id))
+                param->setValueNotifyingHost (param->convertTo0to1 (SubOscAudioProcessor::sharedOscLevelDefault));
+        }
+    };
+
     const juce::StringArray oscLabels { "OSC 1", "OSC 2", "OSC 3" };
     for (int i = 0; i < 3; ++i)
     {
@@ -117,18 +129,29 @@ SubOscAudioProcessorEditor::SubOscAudioProcessorEditor (SubOscAudioProcessor& p)
 
         sec.octave = makeKnob ("osc" + n + "Octave", "OCTAVE");
         sec.detune = makeKnob ("osc" + n + "Detune", "DETUNE");
-        sec.level  = makeKnob ("osc" + n + "Level",  "LEVEL");
+        sec.level  = makeKnob ("osc" + n + "Level",  "LEVEL", false, resetAllOscLevels);
     }
 
-    glideKnob     = makeKnob ("glide", "GLIDE");
-    resonanceKnob = makeKnob ("resonance", "RESONANCE");
-    egAmountKnob  = makeKnob ("egAmount", "EG AMOUNT");
-    attackKnob    = makeKnob ("attack", "ATTACK");
-    decayKnob     = makeKnob ("decay", "DECAY");
-    sustainKnob   = makeKnob ("sustain", "SUSTAIN");
-    releaseKnob   = makeKnob ("release", "RELEASE");
-    volumeKnob    = makeKnob ("volume", "VOLUME");
-    bpmKnob       = makeKnob ("bpm", "TEMPO");
+    glideKnob      = makeKnob ("glide", "GLIDE");
+    filterFreqKnob = makeKnob ("filterFreq", "FILTER");
+    resonanceKnob  = makeKnob ("resonance", "RESONANCE");
+    egAmountKnob   = makeKnob ("egAmount", "EG AMOUNT");
+    attackKnob     = makeKnob ("attack", "ATTACK");
+    decayKnob      = makeKnob ("decay", "DECAY");
+    sustainKnob    = makeKnob ("sustain", "SUSTAIN");
+    releaseKnob    = makeKnob ("release", "RELEASE");
+
+    volumeKnob = makeKnob ("volume", "MASTER VOLUME");
+    volumeKnob.nameLabel->setFont (juce::Font (8.0f, juce::Font::bold));
+
+    globalFilterTypeSwitch.value = (int) std::round (processor.apvts.getRawParameterValue ("filterType")->load());
+    globalFilterTypeSwitch.onChange = [this] (int idx) { setChoiceParam ("filterType", idx); };
+    addAndMakeVisible (globalFilterTypeSwitch);
+    globalFilterTypeLabel.setText ("TYPE", juce::dontSendNotification);
+    globalFilterTypeLabel.setJustificationType (juce::Justification::centred);
+    globalFilterTypeLabel.setColour (juce::Label::textColourId, knobLnF.ink);
+    globalFilterTypeLabel.setFont (juce::Font (9.0f, juce::Font::bold));
+    addAndMakeVisible (globalFilterTypeLabel);
 
     addAndMakeVisible (playButton);
     playButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff101010));
@@ -146,8 +169,15 @@ SubOscAudioProcessorEditor::SubOscAudioProcessorEditor (SubOscAudioProcessor& p)
     addAndMakeVisible (clearButton);
     clearButton.onClick = [this]
     {
-        for (auto& s : steps)
-            s.activeToggle->setToggleState (false, juce::sendNotification);
+        int defaultType = (int) std::round (processor.apvts.getRawParameterValue ("filterType")->load());
+        for (int s = 0; s < SubOscAudioProcessor::numSteps; ++s)
+        {
+            steps[(size_t) s].activeToggle->setToggleState (false, juce::sendNotification);
+            auto id = "step" + juce::String (s + 1) + "Type";
+            if (auto* param = processor.apvts.getParameter (id))
+                param->setValueNotifyingHost (param->convertTo0to1 ((float) defaultType));
+            steps[(size_t) s].typeSwitch->setValueQuiet (defaultType);
+        }
     };
 
     statusLabel.setText ("Click Play to start", juce::dontSendNotification);
@@ -161,7 +191,7 @@ SubOscAudioProcessorEditor::SubOscAudioProcessorEditor (SubOscAudioProcessor& p)
         auto n = juce::String (s + 1);
         auto& st = steps[(size_t) s];
 
-        st.activeToggle = std::make_unique<juce::ToggleButton>();
+        st.activeToggle = std::make_unique<StepOnButton>();
         addAndMakeVisible (*st.activeToggle);
         st.activeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
             processor.apvts, "step" + n + "Active", *st.activeToggle);
@@ -169,6 +199,16 @@ SubOscAudioProcessorEditor::SubOscAudioProcessorEditor (SubOscAudioProcessor& p)
         st.note   = makeKnob ("step" + n + "Note",   "", true);
         st.length = makeKnob ("step" + n + "Length", "", true);
         st.freq   = makeKnob ("step" + n + "Freq",   "", true);
+        st.freq.slider->setDoubleClickReturnValue (true, 0.0); // bidirectional: double-click recentres to 0
+
+        st.typeSwitch = std::make_unique<FilterTypeSwitch>();
+        st.typeSwitch->value = (int) std::round (processor.apvts.getRawParameterValue ("step" + n + "Type")->load());
+        int stepIndexCapture = s;
+        st.typeSwitch->onChange = [this, stepIndexCapture] (int idx)
+        {
+            setChoiceParam ("step" + juce::String (stepIndexCapture + 1) + "Type", idx);
+        };
+        addAndMakeVisible (*st.typeSwitch);
 
         st.numberLabel.setText (n, juce::dontSendNotification);
         st.numberLabel.setJustificationType (juce::Justification::centred);
@@ -189,9 +229,10 @@ SubOscAudioProcessorEditor::SubOscAudioProcessorEditor (SubOscAudioProcessor& p)
     setupRowLabel (seqActiveRowLabel, "ON");
     setupRowLabel (seqNoteRowLabel,   "NOTE");
     setupRowLabel (seqLengthRowLabel, "LENGTH");
-    setupRowLabel (seqFreqRowLabel,   "FILTER FREQ");
+    setupRowLabel (seqFreqRowLabel,   "FILTER MOD");
+    setupRowLabel (seqTypeRowLabel,   "TYPE");
 
-    setSize (1180, 540);
+    setSize (1180, 590);
     startTimerHz (30);
 }
 
@@ -200,10 +241,28 @@ SubOscAudioProcessorEditor::~SubOscAudioProcessorEditor()
     setLookAndFeel (nullptr);
 }
 
-KnobUnit SubOscAudioProcessorEditor::makeKnob (const juce::String& paramID, const juce::String& label, bool tiny)
+void SubOscAudioProcessorEditor::setChoiceParam (const juce::String& paramID, int index)
+{
+    if (auto* param = processor.apvts.getParameter (paramID))
+        param->setValueNotifyingHost (param->convertTo0to1 ((float) index));
+}
+
+KnobUnit SubOscAudioProcessorEditor::makeKnob (const juce::String& paramID, const juce::String& label, bool tiny,
+                                                std::function<void()> altClickAction)
 {
     KnobUnit k;
-    k.slider = std::make_unique<juce::Slider>();
+
+    if (altClickAction != nullptr)
+    {
+        auto linkable = std::make_unique<LinkableSlider>();
+        linkable->onAltClick = altClickAction;
+        k.slider = std::move (linkable);
+    }
+    else
+    {
+        k.slider = std::make_unique<juce::Slider>();
+    }
+
     k.slider->setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     k.slider->setRotaryParameters (juce::degreesToRadians (225.0f), juce::degreesToRadians (495.0f), true);
     k.slider->setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
@@ -254,6 +313,9 @@ void SubOscAudioProcessorEditor::resized()
     auto full = getLocalBounds();
     int x0 = 16, y0 = 64;
 
+    // --- top-right: Master Volume ------------------------------------------
+    placeKnob (volumeKnob, full.getWidth() - 108, 6, 92, 90);
+
     // --- 3 oscillator modules --------------------------------------------
     const int oscW = 210, oscH = 150;
     for (int i = 0; i < 3; ++i)
@@ -269,9 +331,15 @@ void SubOscAudioProcessorEditor::resized()
         placeKnob (oscSections[(size_t) i].level,  x + 2 * kw, ky, kw, 90);
     }
 
-    // --- filter / envelope / master / transport, one row -------------------
+    // --- filter / envelope / transport, one row -----------------------------
     int row2Y = y0 + oscH + 12;
     int gx = x0;
+
+    placeKnob (filterFreqKnob, gx, row2Y, 74, 90); gx += 80;
+
+    globalFilterTypeLabel.setBounds (gx, row2Y, 44, 14);
+    globalFilterTypeSwitch.setBounds (gx, row2Y + 16, 40, 60);
+    gx += 56;
 
     placeKnob (resonanceKnob, gx, row2Y, 74, 90); gx += 80;
     placeKnob (egAmountKnob,  gx, row2Y, 74, 90); gx += 100;
@@ -281,15 +349,13 @@ void SubOscAudioProcessorEditor::resized()
     placeKnob (sustainKnob, gx, row2Y, 74, 90); gx += 80;
     placeKnob (releaseKnob, gx, row2Y, 74, 90); gx += 100;
 
-    placeKnob (volumeKnob, gx, row2Y, 74, 90); gx += 80;
-    placeKnob (glideKnob,  gx, row2Y, 74, 90); gx += 80;
-    placeKnob (bpmKnob,    gx, row2Y, 74, 90); gx += 100;
+    placeKnob (glideKnob, gx, row2Y, 74, 90); gx += 100;
 
     playButton.setBounds (gx, row2Y + 30, 70, 28);
     gx += 78;
     clearButton.setBounds (gx, row2Y + 30, 60, 28);
     gx += 68;
-    statusLabel.setBounds (gx, row2Y + 34, 160, 20);
+    statusLabel.setBounds (gx, row2Y + 34, 180, 20);
 
     // --- sequencer grid ------------------------------------------------------
     int seqY = row2Y + 130;
@@ -303,6 +369,7 @@ void SubOscAudioProcessorEditor::resized()
     seqNoteRowLabel.setBounds   (x0, seqY + 42,  labelGutter - 8, 34);
     seqLengthRowLabel.setBounds (x0, seqY + 80,  labelGutter - 8, 34);
     seqFreqRowLabel.setBounds   (x0, seqY + 118, labelGutter - 8, 34);
+    seqTypeRowLabel.setBounds   (x0, seqY + 156, labelGutter - 8, 40);
 
     for (int s = 0; s < SubOscAudioProcessor::numSteps; ++s)
     {
@@ -316,6 +383,9 @@ void SubOscAudioProcessorEditor::resized()
         st.note.slider->setBounds   (cx, seqY + 42,  cw, 34);
         st.length.slider->setBounds (cx, seqY + 80,  cw, 34);
         st.freq.slider->setBounds   (cx, seqY + 118, cw, 34);
+
+        int swW = juce::jmin (cw, 34);
+        st.typeSwitch->setBounds (cx + (cw - swW) / 2, seqY + 156, swW, 40);
     }
 }
 
@@ -325,12 +395,28 @@ void SubOscAudioProcessorEditor::timerCallback()
     if (cur != lastPaintedStep)
     {
         if (lastPaintedStep >= 0 && lastPaintedStep < (int) steps.size())
-            steps[(size_t) lastPaintedStep].numberLabel.setColour (juce::Label::textColourId, knobLnF.inkDim);
+        {
+            steps[(size_t) lastPaintedStep].activeToggle->playhead = false;
+            steps[(size_t) lastPaintedStep].activeToggle->repaint();
+        }
 
         if (cur >= 0 && cur < (int) steps.size())
-            steps[(size_t) cur].numberLabel.setColour (juce::Label::textColourId, knobLnF.amber);
+        {
+            steps[(size_t) cur].activeToggle->playhead = true;
+            steps[(size_t) cur].activeToggle->repaint();
+        }
 
         lastPaintedStep = cur;
+    }
+
+    // Keep the filter-type switches in sync in case their parameters changed
+    // externally (host automation, preset recall, etc).
+    int globalType = (int) std::round (processor.apvts.getRawParameterValue ("filterType")->load());
+    globalFilterTypeSwitch.setValueQuiet (globalType);
+    for (int s = 0; s < SubOscAudioProcessor::numSteps; ++s)
+    {
+        int t = (int) std::round (processor.apvts.getRawParameterValue ("step" + juce::String (s + 1) + "Type")->load());
+        steps[(size_t) s].typeSwitch->setValueQuiet (t);
     }
 
     bool synced = processor.hostSyncActive.load();

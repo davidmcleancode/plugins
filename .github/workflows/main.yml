@@ -18,7 +18,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SubOsc-macOS-VST3
-          path: path: build/**/*.vst3
+          path: build/**/*.vst3
 
   build-windows:
     runs-on: windows-latest
@@ -32,4 +32,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SubOsc-Windows-VST3
-          path: path: build/**/*.vst3
+          path: build/**/*.vst3

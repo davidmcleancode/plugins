@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SubOsc VERSION 1.0.0)
+   set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build for Intel and Apple Silicon" FORCE)
+   set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version" FORCE)
+
+   project(SubOsc VERSION 1.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

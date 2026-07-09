@@ -7,6 +7,9 @@ cmake_minimum_required(VERSION 3.22)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if (APPLE)
+       set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for macOS" FORCE)
+   endif()
 
 # ---------------------------------------------------------------------------
 # Fetch JUCE automatically. You need an internet connection the first time
